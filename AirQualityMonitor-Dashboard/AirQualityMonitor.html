@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="bs">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sistem za Monitoring Kvaliteta Zraka</title>
+
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Urbanist:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    :root {
+      --bg-main: #160f12;          
+      --header-bg: #110b0d;        
+      --card-bg: #22171b;          
+      --card-hover: #2a1c22;
+      --border-color: #3b2730;     
+      
+      --text-primary: #fdf2f8;     
+      --text-secondary: #c9a0b0;   
+      
+      --accent-pink: #f472b6;      
+      --accent-rose-gold: #f43f5e; 
+      --accent-mauve: #c084fc;     
+
+      --status-good: #34d399;     
+      --status-moderate: #fbbf24; 
+      --status-danger: #f43f5e;   
+      --status-neutral: #8f727f;
+
+      --font-apple: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      width: 100%;
+      overflow-x: hidden; 
+    }
+
+    body {
+      font-family: 'Urbanist', sans-serif;
+      background-color: var(--bg-main);
+      color: var(--text-primary);
+      padding: 16px;
+      line-height: 1.4;
+    }
+
+    .dashboard-container {
+      max-width: 1280px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    /* Header */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--header-bg);
+      border: 1px solid var(--border-color);
+      padding: 16px 20px;
+      border-radius: 14px;
+      margin-bottom: 16px;
+      box-shadow: 0 8px 25px rgba(0, 0, 0, 0.35);
+    }
+
+    header h1 {
+      font-family: var(--font-apple);
+      font-weight: 800;
+      font-size: 1.5rem;
+      letter-spacing: -0.02em;
+      color: var(--text-primary);
+    }
+
+    header .subtitle {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+      margin-top: 2px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .header-meta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .connection-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      background: rgba(244, 114, 182, 0.06);
+      border: 1px solid var(--border-color);
+      border-radius: 20px;
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background-color: var(--status-neutral);
+      transition: all 0.3s ease;
+    }
+
+    .connection-badge.active .status-dot {
+      background-color: var(--status-good);
+      box-shadow: 0 0 8px var(--status-good);
+    }
+
+    .timestamp, .metric-value, footer code {
+      font-family: 'Space Mono', monospace;
+    }
+
+    /* Tab Navigacija */
+    .nav-tabs {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 10px;
+    }
+
+    .tab-btn {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      color: var(--text-secondary);
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-family: var(--font-apple);
+      font-weight: 600;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .tab-btn:hover {
+      background: var(--card-hover);
+      color: var(--text-primary);
+    }
+
+    .tab-btn.active {
+      background: var(--accent-pink);
+      color: #110b0d;
+      border-color: var(--accent-pink);
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    /* Grid Kartica */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .metric-card {
+      min-width: 0; /* Sprečava ekspanziju u Gridu */
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-top: 3px solid var(--border-color);
+      border-radius: 12px;
+      padding: 14px;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    }
+
+    .metric-card.iaq-main-card {
+      grid-column: span 2;
+      background: linear-gradient(135deg, var(--card-bg) 0%, rgba(244, 114, 182, 0.05) 100%);
+    }
+
+    .metric-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .metric-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-secondary);
+    }
+
+    .metric-badge {
+      font-size: 0.65rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 10px;
+      text-transform: uppercase;
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text-secondary);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .metric-value-container {
+      display: flex;
+      align-items: baseline;
+      gap: 4px;
+    }
+
+    .metric-value {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .metric-unit {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+    }
+
+    .charts-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr)); 
+      gap: 12px;
+      margin-bottom: 16px;
+      width: 100%;
+    }
+
+    .chart-card {
+      min-width: 0; 
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 14px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+      height: 240px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .chart-card.full-width {
+      grid-column: 1 / -1;
+      height: 300px;
+    }
+
+    .chart-title {
+      font-family: var(--font-apple);
+      font-weight: 700;
+      font-size: 0.95rem;
+      margin-bottom: 8px;
+      color: var(--text-primary);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .canvas-wrapper {
+      position: relative;
+      flex: 1;
+      width: 100%;
+      min-height: 0;
+      min-width: 0;
+    }
+
+    .btn-reset {
+      background: rgba(244, 63, 94, 0.15);
+      border: 1px solid var(--accent-rose-gold);
+      color: var(--accent-rose-gold);
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 0.7rem;
+      cursor: pointer;
+    }
+
+    footer {
+      text-align: center;
+      padding: 14px;
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+      border-top: 1px solid var(--border-color);
+    }
+
+    footer code {
+      background: rgba(244, 114, 182, 0.1);
+      color: var(--accent-pink);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    /* Responsiveness za manje laptope i tablete */
+    @media (max-width: 900px) {
+      .charts-grid {
+        grid-template-columns: 1fr;
+      }
+      .metric-card.iaq-main-card {
+        grid-column: span 1;
+      }
+      .chart-card {
+        height: 220px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<div class="dashboard-container">
+  <!-- Zaglavlje -->
+  <header>
+    <div>
+      <h1>Sistem za Monitoring Kvaliteta Zraka</h1>
+      <div class="subtitle">IOT AMBIENT MONITORING SYSTEM</div>
+    </div>
+
+    <div class="header-meta">
+      <div class="connection-badge" id="connBadge">
+        <span class="status-dot"></span>
+        <span id="connText">Povezivanje...</span>
+      </div>
+      <div class="timestamp" id="lastUpdate">--:--:--</div>
+    </div>
+  </header>
+
+  <!-- Tabovi za prebacivanje -->
+  <div class="nav-tabs">
+    <button class="tab-btn active" onclick="switchTab('live-tab', this)">Uživo</button>
+    <button class="tab-btn" onclick="switchTab('history-tab', this)">Praćenje 24h</button>
+  </div>
+
+  <!-- TAB 1: UŽIVO MONITORING -->
+  <div id="live-tab" class="tab-content active">
+    
+    <!-- Grid sa Karticama -->
+    <div class="metrics-grid">
+      
+      <!-- IAQ Ukupni Status -->
+      <div class="metric-card iaq-main-card" id="card-iaq">
+        <div class="metric-header">
+          <span class="metric-label">Ukupni Indeks Kvaliteta Zraka (IAQ)</span>
+          <span class="metric-badge" id="badge-iaq">PRORAČUN</span>
+        </div>
+        <div class="metric-value-container">
+          <span class="metric-value" id="val-iaq">Inicijalizacija...</span>
+        </div>
+      </div>
+
+      <!-- CO2 -->
+      <div class="metric-card" id="card-co2">
+        <div class="metric-header">
+          <span class="metric-label">Ugljen-Dioksid (CO₂)</span>
+          <span class="metric-badge" id="badge-co2">CCS811</span>
+        </div>
+        <div class="metric-value-container">
+          <span class="metric-value" id="val-co2">--</span>
+          <span class="metric-unit">ppm</span>
+        </div>
+      </div>
+
+      <!-- PM2.5 -->
+      <div class="metric-card" id="card-pm25">
+        <div class="metric-header">
+          <span class="metric-label">Čestice PM2.5</span>
+          <span class="metric-badge" id="badge-pm25">PMS5003</span>
+        </div>
+        <div class="metric-value-container">
+          <span class="metric-value" id="val-pm25">--</span>
+          <span class="metric-unit">µg/m³</span>
+        </div>
+      </div>
+
+      <!-- TVOC -->
+      <div class="metric-card" id="card-tvoc">
+        <div class="metric-header">
+          <span class="metric-label">Plinovi (TVOC)</span>
+          <span class="metric-badge" id="badge-tvoc">CCS811</span>
+        </div>
+        <div class="metric-value-container">
+          <span class="metric-value" id="val-tvoc">--</span>
+          <span class="metric-unit">ppb</span>
+        </div>
+      </div>
+
+      <!-- Temperatura -->
+      <div class="metric-card" id="card-temp">
+        <div class="metric-header">
+          <span class="metric-label">Temperatura</span>
+          <span class="metric-badge" id="badge-temp">BME280</span>
+        </div>
+        <div class="metric-value-container">
+          <span class="metric-value" id="val-temp">--</span>
+          <span class="metric-unit">°C</span>
+        </div>
+      </div>
+
+      <!-- Vlažnost -->
+      <div class="metric-card" id="card-hum">
+        <div class="metric-header">
+          <span class="metric-label">Vlažnost Zraka</span>
+          <span class="metric-badge" id="badge-hum">BME280</span>
+        </div>
+        <div class="metric-value-container">
+          <span class="metric-value" id="val-hum">--</span>
+          <span class="metric-unit">%</span>
+        </div>
+      </div>
+
+      <!-- Pritisak -->
+      <div class="metric-card" id="card-pres">
+        <div class="metric-header">
+          <span class="metric-label">Atmosferski Pritisak</span>
+          <span class="metric-badge">BME280</span>
+        </div>
+        <div class="metric-value-container">
+          <span class="metric-value" id="val-pres">--</span>
+          <span class="metric-unit">hPa</span>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="charts-grid">
+      <!-- Graf 1: Plinovi -->
+      <div class="chart-card">
+        <div class="chart-title">Plinovi (CO₂ & TVOC)</div>
+        <div class="canvas-wrapper">
+          <canvas id="gasesChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Graf 2: Suspendovane čestice PM2.5 -->
+      <div class="chart-card">
+        <div class="chart-title">Čestice (PM2.5)</div>
+        <div class="canvas-wrapper">
+          <canvas id="pmChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Graf 3: Mikroklima -->
+      <div class="chart-card">
+        <div class="chart-title">Mikroklima (Temp & Vlažnost)</div>
+        <div class="canvas-wrapper">
+          <canvas id="climateChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- TAB 2: 24h ANALIZA I HISTORIJA -->
+  <div id="history-tab" class="tab-content">
+    <div class="chart-card full-width" style="margin-bottom: 16px;">
+      <div class="chart-title">
+        <span>24-Satni Monitoring</span>
+        <button class="btn-reset" onclick="reset24hData()">Resetuj Podatke</button>
+      </div>
+      <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 10px;">
+        Podaci se automatski bilježe na svakih 5 minuta.
+      </p>
+      <div class="canvas-wrapper">
+        <canvas id="chart24h"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Podnožje -->
+  <footer>
+    Broker: <code>broker.hivemq.com:8884 (WSS)</code> | Topic: <code>moj_diplomski_2026/sensors/data</code>
+  </footer>
+</div>
+
+<script>
+  const BROKER_URL = 'wss://broker.hivemq.com:8884/mqtt';
+  const TOPIC = 'moj_diplomski_2026/sensors/data';
+  const MAX_LIVE_POINTS = 15;
+
+  let gasesChart, pmChart, climateChart, chart24h;
+  let historyData = JSON.parse(localStorage.getItem('iaq_24h_data')) || [];
+  let lastSaveTime = 0;
+
+  function switchTab(tabId, btn) {
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById(tabId).classList.add('active');
+    btn.classList.add('active');
+  }
+
+  function initCharts() {
+    Chart.defaults.color = '#c9a0b0';
+    Chart.defaults.scale.grid.color = '#3b2730';
+    Chart.defaults.font.family = "'Space Mono', monospace";
+    Chart.defaults.font.size = 9;
+
+    const commonOptions = {
+      responsive: true,
+      maintainAspectRatio: false, 
+      plugins: {
+        legend: { labels: { boxWidth: 10, padding: 6 } }
+      }
+    };
+
+    // 1. Graf Plinovi
+    gasesChart = new Chart(document.getElementById('gasesChart').getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'CO₂', borderColor: '#f43f5e', backgroundColor: 'rgba(244, 63, 94, 0.1)', data: [], tension: 0.3, yAxisID: 'y' },
+          { label: 'TVOC', borderColor: '#c084fc', backgroundColor: 'rgba(192, 132, 252, 0.1)', data: [], tension: 0.3, yAxisID: 'y1' }
+        ]
+      },
+      options: {
+        ...commonOptions,
+        scales: {
+          y: { type: 'linear', position: 'left', title: { display: true, text: 'ppm' } },
+          y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'ppb' } }
+        }
+      }
+    });
+
+    // 2. Graf PM2.5 Čestica
+    pmChart = new Chart(document.getElementById('pmChart').getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'PM2.5', borderColor: '#fbbf24', backgroundColor: 'rgba(251, 191, 36, 0.1)', data: [], tension: 0.3 }
+        ]
+      },
+      options: {
+        ...commonOptions,
+        scales: { y: { title: { display: true, text: 'µg/m³' } } }
+      }
+    });
+
+    // 3. Graf Mikroklimatskih Uslova
+    climateChart = new Chart(document.getElementById('climateChart').getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'Temp', borderColor: '#f472b6', backgroundColor: 'rgba(244, 114, 182, 0.1)', data: [], tension: 0.3, yAxisID: 'y' },
+          { label: 'Vlažnost', borderColor: '#34d399', backgroundColor: 'rgba(52, 211, 153, 0.1)', data: [], tension: 0.3, yAxisID: 'y1' }
+        ]
+      },
+      options: {
+        ...commonOptions,
+        scales: {
+          y: { type: 'linear', position: 'left', title: { display: true, text: '°C' } },
+          y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: '%' } }
+        }
+      }
+    });
+
+    // 4. Graf 24h 
+    chart24h = new Chart(document.getElementById('chart24h').getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: historyData.map(d => d.time),
+        datasets: [
+          { label: 'CO₂ (ppm)', borderColor: '#f43f5e', data: historyData.map(d => d.co2), tension: 0.2, yAxisID: 'y' },
+          { label: 'PM2.5 (µg/m³)', borderColor: '#fbbf24', data: historyData.map(d => d.pm25), tension: 0.2, yAxisID: 'y1' }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          y: { type: 'linear', position: 'left', title: { display: true, text: 'CO₂ (ppm)' } },
+          y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'PM2.5 (µg/m³)' } }
+        }
+      }
+    });
+  }
+
+  function connectMQTT() {
+    const connBadge = document.getElementById('connBadge');
+    const connText = document.getElementById('connText');
+
+    const client = mqtt.connect(BROKER_URL, {
+      clientId: 'WebDashboard_' + Math.random().toString(16).substring(2, 8),
+      clean: true,
+      reconnectPeriod: 3000
+    });
+
+    client.on('connect', () => {
+      connBadge.classList.add('active');
+      connText.textContent = 'Mreža Aktivna';
+      client.subscribe(TOPIC);
+    });
+
+    client.on('message', (topic, message) => {
+      if (topic === TOPIC) {
+        try {
+          const data = JSON.parse(message.toString());
+          processData(data);
+        } catch (e) {
+          console.error('Greška u parsiranju JSON-a:', e);
+        }
+      }
+    });
+
+    client.on('offline', () => {
+      connBadge.classList.remove('active');
+      connText.textContent = 'Prekinuto';
+    });
+  }
+
+  function processData(data) {
+    const timeStr = new Date().toLocaleTimeString();
+    document.getElementById('lastUpdate').textContent = timeStr;
+
+    if (data.temp !== undefined) {
+      document.getElementById('val-temp').textContent = data.temp.toFixed(1);
+      evalStatus('temp', data.temp, [18, 26], [15, 30]);
+    }
+    if (data.hum !== undefined) {
+      document.getElementById('val-hum').textContent = data.hum.toFixed(1);
+      evalStatus('hum', data.hum, [30, 60], [20, 70]);
+    }
+    if (data.pres !== undefined) document.getElementById('val-pres').textContent = data.pres.toFixed(1);
+    
+    if (data.tvoc !== undefined) {
+      document.getElementById('val-tvoc').textContent = data.tvoc;
+      evalStatus('tvoc', data.tvoc, 110, 220);
+    }
+
+    if (data.co2 !== undefined) {
+      document.getElementById('val-co2').textContent = data.co2;
+      evalStatus('co2', data.co2, 1000, 2000);
+    }
+
+    if (data.pm25 !== undefined) {
+      document.getElementById('val-pm25').textContent = data.pm25;
+      evalStatus('pm25', data.pm25, 12.1, 35);
+    }
+
+    calculateIAQ(data.co2, data.pm25);
+    updateLiveCharts(timeStr, data);
+
+    const now = Date.now();
+    if (now - lastSaveTime > 300000 || historyData.length === 0) {
+      save24hPoint(timeStr, data.co2, data.pm25);
+      lastSaveTime = now;
+    }
+  }
+
+  function evalStatus(param, val, warnLimit, dangerLimit) {
+    const card = document.getElementById(`card-${param}`);
+    const badge = document.getElementById(`badge-${param}`);
+    if (!card || !badge) return;
+
+    let color = 'var(--status-good)';
+    let text = 'Dobro';
+
+    if (Array.isArray(warnLimit)) {
+      if (val < dangerLimit[0] || val > dangerLimit[1]) {
+        color = 'var(--status-danger)'; text = 'Opasno';
+      } else if (val < warnLimit[0] || val > warnLimit[1]) {
+        color = 'var(--status-moderate)'; text = 'Umjereno';
+      }
+    } else {
+      if (val >= dangerLimit) {
+        color = 'var(--status-danger)'; text = 'Opasno';
+      } else if (val >= warnLimit) {
+        color = 'var(--status-moderate)'; text = 'Umjereno';
+      }
+    }
+
+    card.style.borderTopColor = color;
+    badge.textContent = text;
+    badge.style.color = color;
+    badge.style.backgroundColor = `${color}18`;
+    badge.style.borderColor = `${color}30`;
+  }
+
+function calculateIAQ(co2, pm25) {
+    const card = document.getElementById('card-iaq');
+    const valElem = document.getElementById('val-iaq');
+    const badge = document.getElementById('badge-iaq');
+
+    let status = 'DOBRO';
+    let color = 'var(--status-good)';
+
+    if (co2 > 2000 || pm25 > 35) {
+        status = 'OPASNO';
+        color = 'var(--status-danger)';
+    } else if (co2 >= 1000 || pm25 >= 12.1) {
+        status = 'UMJERENO';
+        color = 'var(--status-moderate)';
+    }
+
+    valElem.textContent = status;
+    valElem.style.color = color;
+    card.style.borderTopColor = color;
+    badge.style.color = color;
+}
+
+  function updateLiveCharts(label, data) {
+    const pushData = (chart, datasetsValues) => {
+      if (chart.data.labels.length >= MAX_LIVE_POINTS) {
+        chart.data.labels.shift();
+        chart.data.datasets.forEach(ds => ds.data.shift());
+      }
+      chart.data.labels.push(label);
+      datasetsValues.forEach((v, idx) => chart.data.datasets[idx].data.push(v !== undefined ? v : null));
+      chart.update();
+    };
+
+    pushData(gasesChart, [data.co2, data.tvoc]);
+    pushData(pmChart, [data.pm25]);
+    pushData(climateChart, [data.temp, data.hum]);
+  }
+
+  function save24hPoint(timeStr, co2, pm25) {
+    if (co2 === undefined || pm25 === undefined) return;
+    if (historyData.length >= 288) historyData.shift();
+
+    historyData.push({ time: timeStr, co2: co2, pm25: pm25 });
+    localStorage.setItem('iaq_24h_data', JSON.stringify(historyData));
+
+    chart24h.data.labels = historyData.map(d => d.time);
+    chart24h.data.datasets[0].data = historyData.map(d => d.co2);
+    chart24h.data.datasets[1].data = historyData.map(d => d.pm25);
+    chart24h.update();
+  }
+
+  function reset24hData() {
+    if (confirm("Da li ste sigurni da želite obrisati snimljene podatke?")) {
+      historyData = [];
+      localStorage.removeItem('iaq_24h_data');
+      chart24h.data.labels = [];
+      chart24h.data.datasets[0].data = [];
+      chart24h.data.datasets[1].data = [];
+      chart24h.update();
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    initCharts();
+    connectMQTT();
+  });
+</script>
+
+</body>
+</html>
